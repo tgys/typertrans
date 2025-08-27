@@ -175,7 +175,7 @@ mkdir -p ~/Downloads/children_books/English
 cp your_book.txt ~/Downloads/children_books/English/
 ```
 
-## Demo Videos (with random text downloaded by ai)
+## Demo Videos (with random text downloaded by claude)
 
 ### Typing Practice Session
 ![Typing Practice Demo](recording.gif)
