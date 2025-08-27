@@ -7,6 +7,7 @@ from .network_utils import is_vpn_connected, start_vpn
 from .auth import get_bearer
 from .claude_client import search_book_titles
 from .typing_practice import run_typing_practice
+from .wasabi_cache import WasabiFailedTitlesCache
 
 
 def main_app(stdscr):
@@ -15,9 +16,7 @@ def main_app(stdscr):
     ui.log("📚 Children's Book Downloader Started")
     ui.log("💡 Scroll logs: j/k keys, arrow keys, mouse wheel, or click scrollbar")
     
-    # Add some test log entries to demonstrate scrolling
-    for i in range(15):
-        ui.log(f"📝 Test log entry {i+1} - You can scroll through these logs using j/k keys or arrow keys")
+    # Initial setup complete
     
     ui.refresh_display()
 
@@ -165,16 +164,38 @@ def run_download_process():
 
     ui.log(f"📚 Found {len(book_titles)} book titles from Claude AI")
     
-    # Filter out already processed titles
+    # Initialize Wasabi failed titles cache
+    ui.log("🗃️ Initializing failed titles cache...")
+    try:
+        failed_cache = WasabiFailedTitlesCache(access_key="O9YRIDWGSOTFW07SB6AK")
+        cache_stats = failed_cache.get_stats()
+        ui.log(f"📊 Cache stats: {cache_stats['total_failed']} failed titles, Wasabi: {'✅' if cache_stats['wasabi_connected'] else '❌'}")
+    except Exception as e:
+        ui.log(f"⚠️ Failed to initialize Wasabi cache, using local only: {e}")
+        failed_cache = None
+
+    # Filter out already processed AND failed titles
     new_titles = []
+    skipped_processed = 0
+    skipped_failed = 0
+    
     for title in book_titles:
-        if title.lower() not in processed_titles:
-            new_titles.append(title)
+        if title.lower() in processed_titles:
+            skipped_processed += 1
+            ui.log_to_file_only(f"⚠️ Skipping already processed: {title}")
+        elif failed_cache and failed_cache.is_failed(title):
+            skipped_failed += 1
+            ui.log_to_file_only(f"🚫 Skipping previously failed: {title}")
         else:
-            ui.log(f"⚠️ Skipping already processed: {title}")
+            new_titles.append(title)
+    
+    if skipped_processed > 0:
+        ui.log(f"⚠️ Skipped {skipped_processed} already processed titles")
+    if skipped_failed > 0:
+        ui.log(f"🚫 Skipped {skipped_failed} previously failed titles")
     
     if not new_titles:
-        ui.log("❌ All titles have been processed already")
+        ui.log("❌ All titles have been processed or failed already")
         return
     
     ui.log(f"📖 Processing {len(new_titles)} new titles")
@@ -187,20 +208,26 @@ def run_download_process():
     successful_downloads = 0
     for i, title in enumerate(new_titles):
         ui.log("")  # Empty line with timestamp and column separator
-        ui.log(f"📖 Processing {i+1}/{len(new_titles)}: {title}")
+        # Truncate title if too long to maintain column alignment
+        display_title = title[:50] + "..." if len(title) > 50 else title
+        ui.log(f"📖 Processing {i+1}/{len(new_titles)}: {display_title}")
         
         try:
             # Mark title as processed regardless of outcome
             save_processed_title(download_dir, title)
             
             # Try to download and process the book
-            success = process_book_download(session, title, lang, download_dir, ui)
+            success = process_book_download(session, title, lang, download_dir, ui, failed_cache)
             
             if success:
                 successful_downloads += 1
-                ui.log(f"✅ Successfully processed: {title}")
+                # Truncate title if too long to maintain column alignment
+                display_title = title[:50] + "..." if len(title) > 50 else title
+                ui.log(f"✅ Successfully processed: {display_title}")
             else:
-                ui.log(f"❌ Failed to process: {title}")
+                # Truncate title if too long to maintain column alignment
+                display_title = title[:50] + "..." if len(title) > 50 else title
+                ui.log(f"❌ Failed to process: {display_title}")
             
             # Check if we have enough files
             current_files = count_valid_text_files(download_dir)

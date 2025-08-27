@@ -19,9 +19,10 @@ import re
 import sys
 import os
 
-# Import content validator
+# Import content validator and Wasabi cache
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 from content_validator import validate_childrens_book_content, ChildrensBookValidator
+from .wasabi_cache import WasabiFailedTitlesCache
 
 # Suppress SSL warnings from appearing in console/UI
 import urllib3
@@ -297,11 +298,7 @@ def download_pdf(session: requests.Session, pdf_url: str, title: str, download_d
         if ui:
             ui.log(f"📥 Downloading PDF: {title}")
         
-        # Download the PDF
-        pdf_response = session.get(pdf_url, timeout=60, verify=False)
-        pdf_response.raise_for_status()
-        
-        # Create safe filename
+        # Create safe filename first
         safe_title = "".join(c for c in title if c.isalnum() or c in (' ', '-', '_')).rstrip()
         safe_title = safe_title.replace(' ', '_')[:100]  # Limit length
         fname = f"{safe_title}.pdf"
@@ -310,8 +307,36 @@ def download_pdf(session: requests.Session, pdf_url: str, title: str, download_d
         # Ensure directory exists
         os.makedirs(download_dir, exist_ok=True)
         
-        with open(path, "wb") as f:
-            f.write(pdf_response.content)
+        # Get file size for progress tracking
+        try:
+            head_response = session.head(pdf_url, timeout=10, verify=False)
+            total_size = int(head_response.headers.get('content-length', 0))
+        except:
+            total_size = 0
+        
+        # Stream download with progress updates
+        with session.get(pdf_url, timeout=60, verify=False, stream=True) as pdf_response:
+            pdf_response.raise_for_status()
+            
+            downloaded = 0
+            chunk_size = 8192  # 8KB chunks
+            
+            with open(path, "wb") as f:
+                for chunk in pdf_response.iter_content(chunk_size=chunk_size):
+                    if chunk:  # Filter out keep-alive chunks
+                        f.write(chunk)
+                        downloaded += len(chunk)
+                        
+                        # Update progress bar if UI available and we know total size
+                        if ui and total_size > 0:
+                            ui.show_progress(downloaded, total_size, title, "Downloading PDF")
+                        elif ui:
+                            # Show indeterminate progress if size unknown
+                            ui.show_progress(downloaded // 1024, 0, title, f"Downloading PDF ({downloaded // 1024}KB)")
+            
+            # Show completion progress
+            if ui and total_size > 0:
+                ui.show_progress(total_size, total_size, title, "Download complete")
         
         # Validate file size
         if os.path.getsize(path) < 1024:  # Less than 1KB
@@ -423,24 +448,27 @@ def extract_text_from_pdf(pdf_path: str, title: str, ui=None) -> Optional[str]:
     extraction_method = "unknown"
     
     # Check OCR availability and use appropriate method
+    # Check environment variable to determine OCR preference
+    use_advanced_ocr = os.getenv('USE_ADVANCED_OCR', 'true').lower() == 'true'
+    
     if not OCR_DEPENDENCIES_AVAILABLE:
         if ui:
             ui.log(f"⚠️ OCR libraries not available: {OCR_IMPORT_ERROR}")
             ui.log(f"🔍 Trying pdftotext extraction: {title}")
     else:
-        # Use OCR-based extraction
-        if ADVANCED_OCR_AVAILABLE:
-            if ui:
-                ui.log(f"🔍 Extracting text using advanced OCR: {title}")
-            text_content = extract_with_advanced_ocr(pdf_path, ui)
-            if text_content:
-                extraction_method = "advanced_ocr"
-        elif BASIC_OCR_AVAILABLE:
+        # Use OCR-based extraction based on environment variable preference
+        if not use_advanced_ocr and BASIC_OCR_AVAILABLE:
             if ui:
                 ui.log(f"🔍 Extracting text using basic OCR: {title}")
             text_content = extract_with_basic_ocr(pdf_path, ui)
             if text_content:
                 extraction_method = "basic_ocr"
+        elif use_advanced_ocr and ADVANCED_OCR_AVAILABLE:
+            if ui:
+                ui.log(f"🔍 Extracting text using advanced OCR: {title}")
+            text_content = extract_with_advanced_ocr(pdf_path, ui)
+            if text_content:
+                extraction_method = "advanced_ocr"
     
     # Fallback to pdftotext if OCR failed or not available
     if not text_content:
@@ -560,15 +588,21 @@ def extract_with_basic_ocr(pdf_path: str, ui=None) -> Optional[str]:
         return None
 
 
-def process_book_download(session: requests.Session, title: str, language: str, download_dir: str, ui=None) -> bool:
+def process_book_download(session: requests.Session, title: str, language: str, download_dir: str, ui=None, failed_cache=None) -> bool:
     """Complete process: search -> find PDF -> download -> extract text with content validation"""
     try:
+        # Check if title should be skipped due to previous failure
+        if failed_cache and failed_cache.should_skip(title):
+            return False
         # Step 1: Search Internet Archive with improved ranking
         search_results = search_internet_archive(session, title, language, ui)
         
         if not search_results:
             if ui:
                 ui.log(f"❌ No search results for: {title}")
+            # Add to failed cache - no search results
+            if failed_cache:
+                failed_cache.add_failed(title, "no_search_results")
             return False
         
         # Step 2: Try results in order of relevance score
@@ -677,7 +711,9 @@ def process_book_download(session: requests.Session, title: str, language: str, 
                             pass
                         
                         if ui:
-                            ui.finish_progress(f"📄 {title} - extracted {len(filtered_text)} chars")
+                            # Truncate title if too long to maintain column alignment
+                            display_title = title[:40] + "..." if len(title) > 40 else title
+                            ui.finish_progress(f"📄 {display_title} - extracted {len(filtered_text)} chars")
                         return True
                     else:
                         # Remove PDF if text extraction failed
@@ -687,15 +723,27 @@ def process_book_download(session: requests.Session, title: str, language: str, 
                             pass
                         
                         if ui:
-                            ui.log(f"❌ Text extraction failed for: {title}")
+                            # Truncate title if too long to maintain column alignment
+                            display_title = title[:50] + "..." if len(title) > 50 else title
+                            ui.log(f"❌ Text extraction failed for: {display_title}")
         
         if ui:
-            ui.finish_progress(f"❌ No PDF found for: {title}")
+            # Truncate title if too long to maintain column alignment
+            display_title = title[:50] + "..." if len(title) > 50 else title
+            ui.finish_progress(f"❌ No PDF found for: {display_title}")
+        # Add to failed cache - no PDF found
+        if failed_cache:
+            failed_cache.add_failed(title, "no_pdf_found")
         return False
         
     except Exception as e:
         if ui:
-            ui.log(f"❌ Error processing {title}: {e}")
+            # Truncate title if too long to maintain column alignment
+            display_title = title[:50] + "..." if len(title) > 50 else title
+            ui.log(f"❌ Error processing {display_title}: {e}")
+        # Add to failed cache - general error
+        if failed_cache:
+            failed_cache.add_failed(title, f"error: {str(e)[:100]}")
         return False
 
 

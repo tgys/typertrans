@@ -79,14 +79,15 @@ class NCursesUI:
 
     def init_colors(self):
         curses.start_color()
-        curses.init_pair(1, curses.COLOR_WHITE, curses.COLOR_BLUE)    # Header
+        curses.init_pair(1, curses.COLOR_WHITE, curses.COLOR_RED)     # Incorrect characters - white text on red background
         curses.init_pair(2, curses.COLOR_GREEN, curses.COLOR_BLACK)   # Success
         curses.init_pair(3, curses.COLOR_RED, curses.COLOR_BLACK)     # Error
         curses.init_pair(4, curses.COLOR_YELLOW, curses.COLOR_BLACK)  # Warning
         curses.init_pair(5, curses.COLOR_CYAN, curses.COLOR_BLACK)    # Info
         curses.init_pair(6, curses.COLOR_BLACK, curses.COLOR_WHITE)   # Input field
-        curses.init_pair(7, curses.COLOR_BLUE, curses.COLOR_BLACK) # Light blue for completed words
+        curses.init_pair(7, curses.COLOR_BLUE, curses.COLOR_BLACK)    # Light blue for completed words
         curses.init_pair(8, curses.COLOR_YELLOW, curses.COLOR_BLACK)  # Yellow for current word being typed
+        curses.init_pair(9, curses.COLOR_WHITE, curses.COLOR_BLUE)    # Header/UI elements
 
     def setup_screen(self, stdscr):
         self.stdscr = stdscr
@@ -108,9 +109,9 @@ class NCursesUI:
 
     def draw_header(self):
         title = "📚 Children's Book Downloader"
-        self.stdscr.attron(curses.color_pair(1) | curses.A_BOLD)
+        self.stdscr.attron(curses.color_pair(9) | curses.A_BOLD)
         self.stdscr.addstr(0, (self.width - len(title)) // 2, title)
-        self.stdscr.attroff(curses.color_pair(1) | curses.A_BOLD)
+        self.stdscr.attroff(curses.color_pair(9) | curses.A_BOLD)
 
     def draw_status(self):
         # Add scroll position info
@@ -732,9 +733,9 @@ class NCursesUI:
         input_win.keypad(True)  # Enable arrow keys for input navigation
         input_win.nodelay(False)  # Ensure blocking mode for proper input
         input_win.box()
-        input_win.attron(curses.color_pair(1) | curses.A_BOLD)
+        input_win.attron(curses.color_pair(9) | curses.A_BOLD)
         input_win.addstr(1, 2, "Input Required")
-        input_win.attroff(curses.color_pair(1) | curses.A_BOLD)
+        input_win.attroff(curses.color_pair(9) | curses.A_BOLD)
 
         # Wrap prompt text
         prompt_lines = []
@@ -888,9 +889,9 @@ class NCursesUI:
             menu_win.clear()
             menu_win.box()
 
-            menu_win.attron(curses.color_pair(1) | curses.A_BOLD)
+            menu_win.attron(curses.color_pair(9) | curses.A_BOLD)
             menu_win.addstr(1, (menu_width - len(title)) // 2, title)
-            menu_win.attroff(curses.color_pair(1) | curses.A_BOLD)
+            menu_win.attroff(curses.color_pair(9) | curses.A_BOLD)
             
             # Display visible options
             for i in range(max_visible_options):
